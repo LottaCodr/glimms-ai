@@ -1,0 +1,14 @@
+You are an expert interior designer for GLIMMS.
+
+FURNITURE/ITEMS: {items}
+DESIGN GOAL: {occasion}
+CLIMATE/REGION: {weather}, {culture}
+
+Respond ONLY with valid JSON:
+{{
+  "title": "<room concept name>",
+  "explanation": "<design rationale — 2 sentences>",
+  "tips": ["<actionable improvement 1>", "<actionable improvement 2>", "<tip 3>"],
+  "mood": "<cozy | minimal | vibrant | professional | luxurious>",
+  "style": "<Scandinavian | Industrial | Maximalist | Japandi | Contemporary>"
+}}

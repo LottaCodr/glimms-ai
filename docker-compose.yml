@@ -1,0 +1,77 @@
+version: "3.9"
+
+# ── Glimms AI Services ────────────────────────────────────────────────────────
+# Each service runs on its own port. The API (glimms-api) calls them internally.
+
+services:
+  object-detection:
+    build:
+      context: .
+      dockerfile: services/object_detection/Dockerfile
+    ports: ["8001:8001"]
+    env_file: .env
+    environment: [PORT=8001]
+    restart: unless-stopped
+
+  attribute-extractor:
+    build:
+      context: .
+      dockerfile: services/attribute_extractor/Dockerfile
+    ports: ["8002:8002"]
+    env_file: .env
+    environment: [PORT=8002]
+    restart: unless-stopped
+
+  embedding-engine:
+    build:
+      context: .
+      dockerfile: services/embedding_engine/Dockerfile
+    ports: ["8003:8003"]
+    env_file: .env
+    environment: [PORT=8003]
+    restart: unless-stopped
+
+  permutation-engine:
+    build:
+      context: .
+      dockerfile: services/permutation_engine/Dockerfile
+    ports: ["8004:8004"]
+    env_file: .env
+    environment: [PORT=8004]
+    restart: unless-stopped
+
+  llm-reasoning:
+    build:
+      context: .
+      dockerfile: services/llm_reasoning/Dockerfile
+    ports: ["8005:8005"]
+    env_file: .env
+    environment: [PORT=8005]
+    restart: unless-stopped
+
+  mockup-compositor:
+    build:
+      context: .
+      dockerfile: services/mockup_compositor/Dockerfile
+    ports: ["8006:8006"]
+    env_file: .env
+    environment: [PORT=8006]
+    restart: unless-stopped
+
+  quality-guard:
+    build:
+      context: .
+      dockerfile: services/quality_guard/Dockerfile
+    ports: ["8007:8007"]
+    env_file: .env
+    environment: [PORT=8007]
+    restart: unless-stopped
+
+  context-inference:
+    build:
+      context: .
+      dockerfile: services/context_inference/Dockerfile
+    ports: ["8008:8008"]
+    env_file: .env
+    environment: [PORT=8008]
+    restart: unless-stopped
