@@ -1,6 +1,20 @@
+from __future__ import annotations
+
+import os
+
 from fastapi import FastAPI
-from app.router import router
-app = FastAPI(title="Glimms — Quality Guard")
+
+from .router import router
+
+app = FastAPI(title="Glimms — Quality Guard", version="1.1.0")
 app.include_router(router)
+
+
 @app.get("/health")
-def health(): return {"status": "ok", "service": "quality_guard", "port": 8007}
+def health():
+    return {
+        "status": "ok",
+        "service": "quality-guard",
+        "port": int(os.getenv("PORT", "8007")),
+        "checks": ["blur", "exposure", "contrast", "resolution"],
+    }
