@@ -38,6 +38,9 @@ The services exchange S3 object keys rather than arbitrary URLs. This keeps the
 internal image APIs from becoming an SSRF proxy and lets the API gateway own
 upload authorization.
 
+For the recommended public API, database, queue, security, and worker design,
+see [`docs/BACKEND_IMPLEMENTATION.md`](docs/BACKEND_IMPLEMENTATION.md).
+
 ## Start all services locally
 
 ```bash
