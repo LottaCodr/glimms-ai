@@ -113,8 +113,9 @@ service limits. Do not commit `.env`, model weights, or credentials.
 
 ## Verification
 
-The CI workflow checks imports for every service and runs the lightweight unit
-suite. The code can also be compiled without third-party imports with:
+The repository CI workflow checks imports for every service. The lightweight
+unit suite can be run locally (and is ready to be enabled in CI) with the
+same command. The code can also be compiled without third-party imports with:
 
 ```bash
 python -m compileall -q services shared
