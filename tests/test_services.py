@@ -101,9 +101,95 @@ def test_compositor_outputs_valid_png():
     assert metadata["layers"][0]["width"] > 0
 
 
-def test_provider_parser_handles_markdown_and_fallback():
+def test_provider_parser_handles_markdown_and_fallback(monkeypatch):
     from services.llm_reasoning.app.provider_router import ProviderRouter
 
     assert ProviderRouter._parse("```json\n{\"title\": \"Test\"}\n```") == {"title": "Test"}
-    result = asyncio.run(ProviderRouter().complete("ignored", vertical="garden"))
+    router = ProviderRouter()
+
+    async def _no_network(prompt, entry):
+        raise RuntimeError("no network in tests")
+
+    monkeypatch.setattr(router, "_free_fallback", _no_network)
+    result = asyncio.run(router.complete("ignored", vertical="garden"))
     assert result["season_fit"] == "year-round"
+
+
+def test_free_fallback_defaults_and_builtin_providers(monkeypatch):
+    from services.llm_reasoning.app import main as llm_main
+    from services.llm_reasoning.app.provider_router import ProviderRouter
+
+    for name in (
+        "OPENROUTER_API_KEY",
+        "GROQ_API_KEY",
+        "GOOGLE_AI_API_KEY",
+        "GEMINI_API_KEY",
+        "NVIDIA_NIM_API_KEY",
+        "GITHUB_MODELS_API_KEY",
+        "GITHUB_TOKEN",
+        "OPENROUTER_MODEL",
+        "GROQ_MODEL",
+        "GOOGLE_AI_MODEL",
+        "NVIDIA_NIM_MODEL",
+        "GITHUB_MODELS_MODEL",
+        "FALLBACK_LLM_BASE_URL",
+        "FALLBACK_LLM_API_KEY",
+        "FALLBACK_LLM_MODEL",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+    # Zero configuration: only keyless Pollinations is active.
+    router = ProviderRouter()
+    assert [provider["name"] for provider in router.fallback_providers] == ["text.pollinations.ai"]
+    assert router.fallback_providers[0]["api_key"] == ""
+    assert "free-fallback" in llm_main.health()["providers_configured"]
+    assert llm_main.health()["free_fallback_providers"] == ["text.pollinations.ai"]
+
+    # Each built-in provider activates when its dedicated API key is set.
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-test")
+    monkeypatch.setenv("GROQ_API_KEY", "gsk_test")
+    monkeypatch.setenv("GOOGLE_AI_API_KEY", "AIza_test")
+    monkeypatch.setenv("NVIDIA_NIM_API_KEY", "nvapi-test")
+    monkeypatch.setenv("GITHUB_MODELS_API_KEY", "ghp_test")
+    router = ProviderRouter()
+    names = [provider["name"] for provider in router.fallback_providers]
+    assert names == [
+        "text.pollinations.ai",
+        "openrouter.ai",
+        "api.groq.com",
+        "generativelanguage.googleapis.com",
+        "integrate.api.nvidia.com",
+        "models.github.ai",
+    ]
+    assert router.fallback_providers[1]["model"] == "meta-llama/llama-3.3-70b-instruct:free"
+    assert router.fallback_providers[2]["api_key"] == "gsk_test"
+    assert llm_main.health()["free_fallback_providers"] == names
+
+    # GEMINI_API_KEY is accepted as an alias for Google AI Studio.
+    monkeypatch.delenv("GOOGLE_AI_API_KEY")
+    monkeypatch.setenv("GEMINI_API_KEY", "AIza_alias")
+    router = ProviderRouter()
+    google = next(p for p in router.fallback_providers if p["name"] == "generativelanguage.googleapis.com")
+    assert google["api_key"] == "AIza_alias"
+
+    # Per-provider model overrides are honoured.
+    monkeypatch.setenv("GROQ_MODEL", "qwen-3-32b")
+    groq = next(p for p in ProviderRouter().fallback_providers if p["name"] == "api.groq.com")
+    assert groq["model"] == "qwen-3-32b"
+
+    # Custom providers are appended after the built-ins; duplicates are skipped.
+    monkeypatch.setenv(
+        "FALLBACK_LLM_BASE_URL",
+        "https://openrouter.ai/api/v1,https://example.com/v1",
+    )
+    monkeypatch.setenv("FALLBACK_LLM_API_KEY", ",sk-custom")
+    monkeypatch.setenv("FALLBACK_LLM_MODEL", ",model-custom")
+    router = ProviderRouter()
+    assert router.fallback_providers[-1]["name"] == "example.com"
+    assert router.fallback_providers[-1]["api_key"] == "sk-custom"
+    assert router.fallback_providers[-1]["model"] == "model-custom"
+
+    # The whole free tier can be switched off.
+    monkeypatch.setenv("FALLBACK_LLM_DISABLE", "true")
+    assert ProviderRouter().fallback_providers == []
+    assert "free-fallback" not in llm_main.health()["providers_configured"]

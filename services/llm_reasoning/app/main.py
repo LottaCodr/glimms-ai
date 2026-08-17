@@ -4,9 +4,10 @@ import os
 
 from fastapi import FastAPI
 
+from .provider_router import ProviderRouter
 from .router import router
 
-app = FastAPI(title="Glimms — LLM Reasoning", version="1.1.0")
+app = FastAPI(title="Glimms — LLM Reasoning", version="1.3.0")
 app.include_router(router)
 
 
@@ -17,10 +18,14 @@ def health():
         configured.append("openai")
     if os.getenv("ANTHROPIC_API_KEY", "").strip():
         configured.append("anthropic")
+    free_fallback = [provider["name"] for provider in ProviderRouter().fallback_providers]
+    if free_fallback:
+        configured.append("free-fallback")
     return {
         "status": "ok",
         "service": "llm-reasoning",
         "port": int(os.getenv("PORT", "8005")),
         "providers_configured": configured,
+        "free_fallback_providers": free_fallback,
         "offline_fallback": True,
     }
