@@ -41,6 +41,11 @@ upload authorization.
 For the recommended public API, database, queue, security, and worker design,
 see [`docs/BACKEND_IMPLEMENTATION.md`](docs/BACKEND_IMPLEMENTATION.md).
 
+To call an already-hosted all-in-one deployment (for example on Render) from a
+product backend, see [`docs/RENDER_INTEGRATION.md`](docs/RENDER_INTEGRATION.md)
+and the reference client in
+[`examples/glimms-client.ts`](examples/glimms-client.ts).
+
 ## Start all services locally
 
 ```bash
