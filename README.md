@@ -64,6 +64,26 @@ The Pinecone and model integrations are optional during local development:
 - Set `S3_ENDPOINT_URL` when using an S3-compatible local service such as
   MinIO.
 
+## Run everything in one container
+
+The repository-root `Dockerfile` builds a lightweight all-in-one image for
+single-container deployments. It starts all eight services inside one
+container plus a gateway that exposes them on a single port:
+
+```bash
+docker build -t glimms-all-in-one .
+docker run --rm -p 8080:8080 --env-file .env glimms-all-in-one
+```
+
+The gateway listens on `$PORT` (default 8080). Route any request through a
+`/<service-name>/` prefix and it is passed to that service unchanged, for
+example `POST /permutation-engine/generate`, `GET /quality-guard/health`, or
+`/llm-reasoning/docs`. `GET /health` returns the aggregated status of all
+eight services. The all-in-one image intentionally omits the heavyweight
+model dependencies (torch, CLIP, YOLO, rembg, Pinecone), so it runs the same
+deterministic offline fallbacks described above; build the per-service images
+with `docker compose up --build` for the real integrations.
+
 ## Start one service
 
 ```bash
