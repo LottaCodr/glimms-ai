@@ -1,0 +1,87 @@
+# Render blueprint for the all-in-one Glimms deployment.
+#
+# Two shapes are offered:
+#
+#   glimms-ai          a PRIVATE service — no public URL at all. This is the
+#                      recommended production shape: your product backend
+#                      reaches it over Render's internal network, so the
+#                      pipeline is never exposed to the internet.
+#
+#   glimms-ai-staging  a public web service, guarded by AI_INTERNAL_TOKEN,
+#                      for integration testing against a real URL.
+#
+# Deploy with: render blueprint launch  (or connect the repo in the dashboard).
+
+services:
+  # ── Production: private, no public URL ────────────────────────────────────
+  - type: pserv
+    name: glimms-ai
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: starter
+    healthCheckPath: /livez
+    envVars:
+      - key: GLIMMS_ENV
+        value: production
+      # Mandatory in production: startup fails without it.
+      - key: AI_INTERNAL_TOKEN
+        generateValue: true
+      # Prototype output must never reach users.
+      - key: ALLOW_DEV_FALLBACKS
+        value: "false"
+      - key: LOG_LEVEL
+        value: INFO
+      - key: MAX_REQUEST_BYTES
+        value: "20971520"
+      - key: MAX_CONCURRENT_UPSTREAM
+        value: "16"
+      - key: ARTIFACT_URL_TTL_SECONDS
+        value: "900"
+      # Scope the bucket: read only session images, write only mockups.
+      - key: S3_ALLOWED_KEY_PREFIXES
+        value: users/
+      - key: S3_OUTPUT_KEY_PREFIXES
+        value: users/
+      # Set these in the dashboard; never commit them.
+      - key: AWS_REGION
+        sync: false
+      - key: AWS_ACCESS_KEY_ID
+        sync: false
+      - key: AWS_SECRET_ACCESS_KEY
+        sync: false
+      - key: S3_BUCKET
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: PINECONE_API_KEY
+        sync: false
+      - key: PINECONE_INDEX
+        sync: false
+      - key: CLIP_ENABLED
+        value: "true"
+
+  # ── Staging: public URL, token-guarded, fallbacks allowed ────────────────
+  - type: web
+    name: glimms-ai-staging
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: starter
+    healthCheckPath: /livez
+    envVars:
+      - key: GLIMMS_ENV
+        value: staging
+      - key: AI_INTERNAL_TOKEN
+        generateValue: true
+      # Staging exists to exercise the contract, so prototypes are fine here.
+      - key: ALLOW_DEV_FALLBACKS
+        value: "true"
+      - key: LOG_LEVEL
+        value: INFO
+      - key: AWS_REGION
+        sync: false
+      - key: AWS_ACCESS_KEY_ID
+        sync: false
+      - key: AWS_SECRET_ACCESS_KEY
+        sync: false
+      - key: S3_BUCKET
+        sync: false

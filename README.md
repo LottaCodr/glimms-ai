@@ -16,8 +16,8 @@
 | `quality-guard` | 8007 | `POST /check` | Blur, exposure, contrast, resolution, quality score, and re-capture guidance |
 | `context-inference` | 8008 | `POST /infer` | Explicit-input climate/culture/occasion rules mapped to reusable style constraints |
 
-Every service also exposes `GET /health` and FastAPI documentation at
-`/docs`. Compatibility aliases are available for the main pipeline endpoints:
+Every service also exposes `GET /health`, an unauthenticated `GET /livez`
+liveness probe, and FastAPI documentation at `/docs`. Compatibility aliases are available for the main pipeline endpoints:
 `/context`, `/permute`, `/permutations`, `/query`, `/assess`, `/quality`, and
 `/mockup`.
 
@@ -40,6 +40,32 @@ upload authorization.
 
 For the recommended public API, database, queue, security, and worker design,
 see [`docs/BACKEND_IMPLEMENTATION.md`](docs/BACKEND_IMPLEMENTATION.md).
+
+To call an already-hosted all-in-one deployment (for example on Render) from a
+product backend, see [`docs/RENDER_INTEGRATION.md`](docs/RENDER_INTEGRATION.md)
+and the reference client in
+[`examples/glimms-client.ts`](examples/glimms-client.ts).
+
+## Security and deployment mode
+
+Two environment variables decide how the services behave in a real deployment:
+
+| Variable | Effect |
+|---|---|
+| `AI_INTERNAL_TOKEN` | When set, the gateway and every service require `Authorization: Bearer <token>` on all endpoints except `/livez`. Comma-separated values are accepted so tokens can be rotated without downtime. |
+| `GLIMMS_ENV` | `development` (default), `staging`, or `production`. In `production` the token becomes **mandatory** — the process refuses to start without it — and every deterministic development fallback returns `503` instead of prototype output. |
+
+`ALLOW_DEV_FALLBACKS` overrides the fallback policy explicitly in either
+direction (for example `true` for a production demo running without models).
+
+The gateway also exposes `GET /readyz`, which returns `503` unless every
+service is reachable *and* none of them is answering with a blocked fallback.
+Point a load balancer or platform health check at `/readyz` (or `/livez` for
+pure liveness) rather than `/health`.
+
+Two further limits apply to S3 keys: `S3_ALLOWED_KEY_PREFIXES` and
+`S3_OUTPUT_KEY_PREFIXES` restrict which object keys may be read and written.
+Path traversal and absolute keys are always rejected.
 
 ## Start all services locally
 

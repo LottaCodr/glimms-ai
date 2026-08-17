@@ -4,11 +4,14 @@ import os
 
 from fastapi import FastAPI
 
+from shared.auth import install_service_auth
+
 from .provider_router import ProviderRouter
 from .router import router
 
 app = FastAPI(title="Glimms — LLM Reasoning", version="1.3.0")
 app.include_router(router)
+install_service_auth(app, "llm-reasoning")
 
 
 @app.get("/health")
@@ -29,3 +32,10 @@ def health():
         "free_fallback_providers": free_fallback,
         "offline_fallback": True,
     }
+
+
+@app.get("/livez")
+def livez():
+    """Liveness probe; intentionally unauthenticated."""
+
+    return {"status": "ok", "service": "llm-reasoning"}

@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request
 
+from shared.runtime import DevFallbackBlocked, guard_dev_fallback
 from shared.s3 import fetch_image_bytes
 
 from .schemas import DetectionError, DetectionRequest, DetectionResponse
@@ -21,6 +22,18 @@ async def detect(request: Request, body: DetectionRequest) -> DetectionResponse:
 
         detector = Detector()
         request.app.state.detector = detector
+
+    # Without a model this endpoint returns deterministic prototype boxes.
+    # They are useful for wiring the pipeline and dangerous as product output.
+    try:
+        guard_dev_fallback(
+            "object-detection",
+            degraded=detector.model is None,
+            reason="no detection model is loaded; results would be prototypes",
+            remedy="mount a YOLOv8 ONNX model and set MODEL_PATH/MODEL_LABELS",
+        )
+    except DevFallbackBlocked as exc:
+        raise HTTPException(status_code=503, detail=exc.detail()) from exc
 
     all_items = []
     errors: list[DetectionError] = []

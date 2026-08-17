@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
+from shared.runtime import DevFallbackBlocked, guard_dev_fallback
 from shared.s3 import fetch_image_bytes
 
 from .clip_extractor import CLIPExtractor
@@ -39,6 +40,18 @@ class ExtractionResponse(BaseModel):
 
 @router.post("/extract", response_model=ExtractionResponse)
 async def extract(body: ExtractionRequest) -> ExtractionResponse:
+    # Offline vectors are stable and mutually comparable, but they are not
+    # CLIP space: indexing them alongside real embeddings corrupts search.
+    try:
+        guard_dev_fallback(
+            "attribute-extractor",
+            degraded=not clip.enabled,
+            reason="CLIP is disabled; embeddings would be deterministic placeholders",
+            remedy="set CLIP_ENABLED=true and install the transformer dependencies",
+        )
+    except DevFallbackBlocked as exc:
+        raise HTTPException(status_code=503, detail=exc.detail()) from exc
+
     enriched: list[dict] = []
     errors: list[ExtractionError] = []
     for item in body.items:
