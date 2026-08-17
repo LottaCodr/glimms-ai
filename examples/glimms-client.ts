@@ -1,15 +1,19 @@
 /**
  * Reference backend client for the hosted all-in-one Glimms deployment.
  *
- *   const glimms = new GlimmsClient({ baseUrl: process.env.GLIMMS_BASE_URL! });
+ *   const glimms = new GlimmsClient({
+ *     baseUrl: process.env.GLIMMS_BASE_URL!,
+ *     internalToken: process.env.GLIMMS_INTERNAL_TOKEN,
+ *   });
  *
- * Server-side only. The gateway has no authentication of its own, so this
- * must never be bundled into browser or mobile code.
+ * Server-side only. It carries the shared internal token, so it must never be
+ * bundled into browser or mobile code.
  */
 
 export interface GlimmsOptions {
   baseUrl: string;
-  /** Sent as `Authorization: Bearer ...` once the gateway enforces a token. */
+  /** Sent as `Authorization: Bearer ...`. Required unless the deployment is
+   *  running with AI_INTERNAL_TOKEN unset (development only). */
   internalToken?: string;
   timeoutMs?: number;
   maxRetries?: number;
@@ -101,12 +105,18 @@ export class GlimmsClient {
         if (response.ok) return (await response.json()) as T;
 
         const detail = await response.text().catch(() => "");
+
+        // A blocked development fallback is a configuration problem, not a
+        // transient one: retrying it just burns the job's budget.
+        const blocked =
+          response.status === 503 && detail.includes("development_fallback_blocked");
+
         lastError = new GlimmsError(
           `${service}${path} failed: ${response.status} ${detail.slice(0, 300)}`,
           response.status,
           service,
           correlationId,
-          RETRYABLE_STATUS.has(response.status),
+          !blocked && RETRYABLE_STATUS.has(response.status),
         );
         if (!lastError.retryable) throw lastError;
       } catch (err) {
@@ -141,6 +151,7 @@ export class GlimmsClient {
   async health(): Promise<any> {
     const response = await fetch(`${this.baseUrl}/health`, {
       signal: AbortSignal.timeout(30_000),
+      headers: this.token ? { authorization: `Bearer ${this.token}` } : {},
     });
     if (!response.ok) {
       throw new GlimmsError("health check failed", response.status, "gateway", "-", true);
@@ -150,10 +161,13 @@ export class GlimmsClient {
 
   /**
    * True when the deployment is serving deterministic development fallbacks
-   * instead of real models. Gate production publishing on this.
+   * instead of real models. The gateway computes this itself; the local
+   * fallback below keeps the client working against older deployments.
    */
   async isDegraded(): Promise<boolean> {
     const h = await this.health();
+    if (typeof h.production_ready === "boolean") return !h.production_ready;
+
     const s = h.services ?? {};
     return (
       s["object-detection"]?.model_loaded === false ||
@@ -161,6 +175,18 @@ export class GlimmsClient {
       s["embedding-engine"]?.backend === "memory" ||
       !s["llm-reasoning"]?.providers_configured?.some((p: string) => p !== "free-fallback")
     );
+  }
+
+  /**
+   * Readiness as the deployment itself judges it: 200 only when every service
+   * is reachable and none is answering with a blocked development fallback.
+   */
+  async isReady(): Promise<boolean> {
+    const response = await fetch(`${this.baseUrl}/readyz`, {
+      signal: AbortSignal.timeout(30_000),
+      headers: this.token ? { authorization: `Bearer ${this.token}` } : {},
+    });
+    return response.ok;
   }
 
   // ----------------------------------------------------------------- services

@@ -6,6 +6,10 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
+from shared import s3
+from shared.runtime import allow_dev_fallbacks
+from shared.auth import install_service_auth
+
 from .detector import Detector
 from .router import router
 
@@ -21,6 +25,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Glimms — Object Detection", version="1.1.0", lifespan=lifespan)
 app.include_router(router)
+install_service_auth(app, "object-detection")
 
 
 @app.get("/health")
@@ -31,4 +36,13 @@ def health():
         "service": "object-detection",
         "port": int(os.getenv("PORT", "8001")),
         "model_loaded": bool(detector and detector.model is not None),
+        "dev_fallbacks_allowed": allow_dev_fallbacks(),
+        **s3.health(),
     }
+
+
+@app.get("/livez")
+def livez():
+    """Liveness probe; intentionally unauthenticated."""
+
+    return {"status": "ok", "service": "object-detection"}

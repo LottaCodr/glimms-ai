@@ -7,12 +7,18 @@ all eight FastAPI services run inside one container and the gateway exposes
 them on one port under a `/<service-name>/` prefix.
 
 ```text
-GET  /                          index page listing the services
-GET  /index.json                machine-readable service index
-GET  /health                    aggregated health of all eight services
-ANY  /<service-name>/<path>     proxied unchanged to that service
-GET  /<service-name>/docs       that service's OpenAPI docs
+GET  /                          index page listing the services      (public)
+GET  /livez                     gateway liveness                     (public)
+GET  /index.json                machine-readable service index       (public)
+GET  /health                    aggregated health + degradation list (token)
+GET  /readyz                    503 unless every service is real     (token)
+ANY  /<service-name>/<path>     proxied unchanged to that service    (token)
+GET  /<service-name>/docs       that service's OpenAPI docs          (token)
 ```
+
+Endpoints marked *(token)* require `Authorization: Bearer $AI_INTERNAL_TOKEN`
+whenever that variable is set — and setting it is **mandatory** when
+`GLIMMS_ENV=production`, where the container refuses to boot without it.
 
 ## 1. Mental model: it is an internal dependency, not your API
 
@@ -28,9 +34,9 @@ client ──HTTPS+auth──> your backend ──server-to-server──> glimms
                             └── queue/worker (runs the pipeline off the request path)
 ```
 
-Never call the Render URL from browser or mobile code. It has **no
-authentication**, so anything the client can reach, the internet can reach —
-and a public `/mockup-compositor/compose` on your bucket is an abuse vector.
+Never call the Render URL from browser or mobile code. Even with the bearer
+token in place, shipping that secret to a client hands the pipeline (and your
+bucket) to anyone who opens devtools.
 
 ## 2. Endpoint map (via the gateway)
 
@@ -56,10 +62,24 @@ share the same bucket/credentials as your backend, or those four endpoints
 
 ## 3. Wire it up
 
+On your backend:
+
 ```env
 GLIMMS_BASE_URL=https://glimms-ai.onrender.com
+GLIMMS_INTERNAL_TOKEN=<same value as AI_INTERNAL_TOKEN on Render>
 GLIMMS_TIMEOUT_MS=120000
-GLIMMS_ALLOW_FALLBACKS=false   # refuse dev-fallback output in production
+```
+
+On the Render service (see [`render.yaml`](../render.yaml) for a blueprint that
+sets all of this):
+
+```env
+GLIMMS_ENV=production
+AI_INTERNAL_TOKEN=<openssl rand -hex 32>
+ALLOW_DEV_FALLBACKS=false
+S3_ALLOWED_KEY_PREFIXES=users/
+S3_OUTPUT_KEY_PREFIXES=users/
+ARTIFACT_URL_TTL_SECONDS=900
 ```
 
 Point one env var at the gateway and derive per-service paths from it; don't
@@ -114,63 +134,94 @@ and test the whole backend contract end to end today. Before it serves real
 users, either set the real provider keys and mount the models, or deploy the
 per-service images from `docker-compose.yml`.
 
-Make that explicit in code — gate on health rather than hoping:
+You no longer have to detect this by hand. The deployment enforces it:
 
-```ts
-const h = await glimms.health();
-const degraded =
-  h.services["object-detection"].model_loaded === false ||
-  h.services["embedding-engine"].backend === "memory" ||
-  h.services["attribute-extractor"].clip_enabled === false;
+- `GET /health` returns a `degradations` array and a `production_ready`
+  boolean naming every service currently running a fallback.
+- `GET /readyz` returns **503** when any service is unreachable *or* running a
+  fallback that is not explicitly permitted. Point Render's health check and
+  any load balancer at this.
+- With `GLIMMS_ENV=production` (or `ALLOW_DEV_FALLBACKS=false`), the affected
+  endpoints themselves return **503** with a machine-readable body rather than
+  prototype output:
 
-if (degraded && process.env.NODE_ENV === "production") {
-  throw new Error("Glimms is running development fallbacks; refusing to publish results");
-}
+```json
+{"detail": {"error": "development_fallback_blocked",
+            "service": "object-detection",
+            "reason": "no detection model is loaded; results would be prototypes",
+            "remedy": "mount a YOLOv8 ONNX model and set MODEL_PATH/MODEL_LABELS"}}
 ```
 
-Store a `degraded: true` flag on any session produced this way so the results
-can be found and re-run later.
+The rule-based services (`context-inference`, `permutation-engine`,
+`quality-guard`) are unaffected — they have no fallback to block.
+
+Set `ALLOW_DEV_FALLBACKS=true` to knowingly run a demo on prototype output, and
+store a `degraded: true` flag on any session produced that way so those results
+can be found and re-run later. `glimms.isDegraded()` in the reference client
+reads the same signal.
 
 ## 5. Hardening checklist for the hosted instance
 
 The gateway ships with no auth, so the current URL is world-callable.
 
-1. **Add a shared secret.** Require `Authorization: Bearer $AI_INTERNAL_TOKEN`
-   in the gateway and set it in Render's env; reject everything else. Rotate it
-   from a secret manager.
-2. **Prefer a private network.** On Render, use a Private Service and reach it
-   over the internal hostname so it has no public URL at all.
-3. **Scope S3.** Give the container a key that can only read
-   `users/*/sessions/*` and write `.../mockups/*` in the one bucket — never a
-   wildcard key.
-4. **Rate-limit and size-limit** at your backend, before Glimms: max images per
-   session, max bytes per image, max permutations per job.
-5. **Signed URLs only.** Persist `output_key` from `/compose` and mint a fresh
-   short-lived presigned GET when the client asks for the artifact; don't hand
-   out the raw returned URL.
-6. **Correlation IDs.** Send `X-Correlation-ID` on every call and log it with
-   the response status and latency so a slow job can be traced across the eight
-   services.
+1. **Set `AI_INTERNAL_TOKEN`.** Both the gateway and each service now enforce
+   `Authorization: Bearer <token>` on everything except `/livez`. Comma-separated
+   values are accepted, so rotation is: add the new token, redeploy callers,
+   drop the old one. Generate with `openssl rand -hex 32`.
+2. **Set `GLIMMS_ENV=production`.** This makes the token mandatory (the
+   container fails to boot without it) and blocks every dev fallback.
+3. **Prefer a private network.** `render.yaml` defines the production service
+   as a Render *Private Service* — no public URL at all. The token then becomes
+   defence in depth rather than the only barrier.
+4. **Scope S3 two ways.** Give the container an IAM key limited to the one
+   bucket, *and* set `S3_ALLOWED_KEY_PREFIXES` / `S3_OUTPUT_KEY_PREFIXES` so a
+   malformed or hostile `image_key` cannot read or overwrite outside
+   `users/`. Traversal (`..`) and absolute keys are rejected outright.
+5. **Rate-limit at your backend**, before Glimms: max images per session, max
+   permutations per job. The gateway already caps body size
+   (`MAX_REQUEST_BYTES`, default 20 MB → 413) and in-flight upstream requests
+   (`MAX_CONCURRENT_UPSTREAM`, default 16).
+6. **Signed URLs.** `/compose` now returns `signed_url` (TTL
+   `ARTIFACT_URL_TTL_SECONDS`, default 900 s) alongside `object_url`. Persist
+   `output_key` as the durable reference and mint a fresh signed URL per
+   request; keep the bucket private.
+7. **Correlation IDs.** The gateway accepts `X-Correlation-ID` (generating one
+   if absent), forwards it upstream, and echoes it on every response including
+   errors — log it against each job.
 
 ## 6. Smoke test
 
 ```bash
 BASE=https://glimms-ai.onrender.com
+TOKEN=<AI_INTERNAL_TOKEN>
+AUTH="authorization: Bearer $TOKEN"
 
-curl -s "$BASE/health" | jq '.status, .services["embedding-engine"].backend'
+# Public: no token needed.
+curl -s "$BASE/livez"
 
-# Rule-based, needs no S3 — good liveness probe for the pipeline.
-curl -s -X POST "$BASE/context-inference/infer" \
+# Is this deployment fit to serve users? 200 = yes, 503 = fallbacks/unreachable.
+curl -s -o /dev/null -w '%{http_code}\n' -H "$AUTH" "$BASE/readyz"
+
+curl -s -H "$AUTH" "$BASE/health" | jq '.production_ready, .degradations'
+
+# Rule-based, needs no S3 — good end-to-end probe for the pipeline.
+curl -s -X POST "$BASE/context-inference/infer" -H "$AUTH" \
   -H 'content-type: application/json' \
   -d '{"vertical":"wardrobe","climate":{"temperature_c":29,"humidity":78},"occasion":"work"}'
 
-curl -s -X POST "$BASE/permutation-engine/generate" \
+curl -s -X POST "$BASE/permutation-engine/generate" -H "$AUTH" \
   -H 'content-type: application/json' \
   -d '{"vertical":"wardrobe","context":{"occasion":"work"},
        "items":[{"id":"t1","label":"shirt","category":"top"},
                 {"id":"b1","label":"chinos","category":"bottom"},
                 {"id":"s1","label":"loafers","category":"footwear"}]}'
 ```
+
+Expect `401` without the header once `AI_INTERNAL_TOKEN` is set, and `503`
+with a `development_fallback_blocked` body from `/object-detection/detect`,
+`/attribute-extractor/extract`, `/embedding-engine/*` and
+`/llm-reasoning/reason` while the deployment is in production mode without
+real models, Pinecone, or provider keys.
 
 The S3-backed endpoints (`/detect`, `/extract`, `/check`, `/compose`) will
 return per-item errors until `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`,

@@ -3,12 +3,13 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from shared.s3 import fetch_image_bytes, upload_image_bytes
+from shared.s3 import fetch_image_bytes, presigned_get_url, upload_image_bytes
 
 from .compositor import Compositor
 
@@ -86,9 +87,21 @@ async def compose(body: ComposeRequest) -> dict[str, Any]:
             output_key = f"mockups/{fingerprint}.{extension}"
         content_type = "image/png" if extension == "png" else "image/jpeg"
         url = upload_image_bytes(output_key, image_bytes, content_type=content_type)
+        # The bucket should be private, so the plain object URL is not usable
+        # on its own.  Hand back a short-lived signed URL as well and let the
+        # caller persist ``output_key`` as the durable reference.
+        signed_url: str | None = None
+        expires_in = int(os.getenv("ARTIFACT_URL_TTL_SECONDS", "900"))
+        try:
+            signed_url = presigned_get_url(output_key, expires_in=expires_in)
+        except Exception as exc:  # noqa: BLE001 - signing is best-effort
+            logger.warning("Could not presign %s: %s", output_key, exc)
         return {
             "output_key": output_key,
-            "url": url,
+            "url": signed_url or url,
+            "object_url": url,
+            "signed_url": signed_url,
+            "expires_in": expires_in if signed_url else None,
             "width": metadata["width"],
             "height": metadata["height"],
             "layers": metadata["layers"],
