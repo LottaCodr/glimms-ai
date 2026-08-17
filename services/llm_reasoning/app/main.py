@@ -7,7 +7,7 @@ from fastapi import FastAPI
 from .provider_router import ProviderRouter
 from .router import router
 
-app = FastAPI(title="Glimms — LLM Reasoning", version="1.2.0")
+app = FastAPI(title="Glimms — LLM Reasoning", version="1.3.0")
 app.include_router(router)
 
 
