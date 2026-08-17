@@ -114,6 +114,22 @@ curl -X POST http://localhost:8003/search \
 See [`.env.example`](.env.example) for provider, S3, model, threshold, and
 service limits. Do not commit `.env`, model weights, or credentials.
 
+### Free LLM fallback provider
+
+`llm-reasoning` tries providers in this order: the configured primary
+(OpenAI or Anthropic), the other one, every configured free
+OpenAI-compatible provider, and finally the deterministic offline fallback.
+
+**Pollinations is enabled by default and needs no API key**, so the free
+fallback works with zero configuration. To add more free providers (OpenRouter
+`:free` models, Groq, Google AI Studio, NVIDIA NIM, GitHub Models, ...), use
+the comma-separated `FALLBACK_LLM_BASE_URL` / `FALLBACK_LLM_API_KEY` /
+`FALLBACK_LLM_MODEL` variables — entries align by position, an API key may be
+empty for keyless providers, and each is tried in order. Set
+`FALLBACK_LLM_DISABLE=true` to turn the free tier off entirely. Free tiers are
+rate-limited and intended for development; do not rely on them under
+production load.
+
 ## Verification
 
 The repository CI workflow checks imports for every service. The lightweight

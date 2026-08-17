@@ -101,9 +101,48 @@ def test_compositor_outputs_valid_png():
     assert metadata["layers"][0]["width"] > 0
 
 
-def test_provider_parser_handles_markdown_and_fallback():
+def test_provider_parser_handles_markdown_and_fallback(monkeypatch):
     from services.llm_reasoning.app.provider_router import ProviderRouter
 
     assert ProviderRouter._parse("```json\n{\"title\": \"Test\"}\n```") == {"title": "Test"}
-    result = asyncio.run(ProviderRouter().complete("ignored", vertical="garden"))
+    router = ProviderRouter()
+
+    async def _no_network(prompt, entry):
+        raise RuntimeError("no network in tests")
+
+    monkeypatch.setattr(router, "_free_fallback", _no_network)
+    result = asyncio.run(router.complete("ignored", vertical="garden"))
     assert result["season_fit"] == "year-round"
+
+
+def test_free_fallback_defaults_to_pollinations_and_accepts_extras(monkeypatch):
+    from services.llm_reasoning.app import main as llm_main
+    from services.llm_reasoning.app.provider_router import ProviderRouter
+
+    # Zero configuration: Pollinations is always available and needs no key.
+    router = ProviderRouter()
+    assert router.fallback_providers[0]["name"] == "text.pollinations.ai"
+    assert router.fallback_providers[0]["api_key"] == ""
+    assert "free-fallback" in llm_main.health()["providers_configured"]
+
+    # Extra OpenAI-compatible providers are appended in order; entries in the
+    # comma-separated lists align by position and keys may be empty.
+    monkeypatch.setenv(
+        "FALLBACK_LLM_BASE_URL",
+        "https://openrouter.ai/api/v1,https://api.groq.com/openai/v1,https://text.pollinations.ai/openai",
+    )
+    monkeypatch.setenv("FALLBACK_LLM_API_KEY", ",gsk_test")
+    monkeypatch.setenv("FALLBACK_LLM_MODEL", "meta-llama/llama-3.3-70b-instruct:free,")
+    router = ProviderRouter()
+    names = [provider["name"] for provider in router.fallback_providers]
+    assert names == ["text.pollinations.ai", "openrouter.ai", "api.groq.com"]
+    assert router.fallback_providers[1]["api_key"] == ""
+    assert router.fallback_providers[1]["model"] == "meta-llama/llama-3.3-70b-instruct:free"
+    assert router.fallback_providers[2]["api_key"] == "gsk_test"
+    assert router.fallback_providers[2]["model"] == "openai"
+    assert llm_main.health()["free_fallback_providers"] == names
+
+    # The whole free tier can be switched off.
+    monkeypatch.setenv("FALLBACK_LLM_DISABLE", "true")
+    assert ProviderRouter().fallback_providers == []
+    assert "free-fallback" not in llm_main.health()["providers_configured"]
